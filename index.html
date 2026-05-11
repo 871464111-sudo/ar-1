@@ -1,13 +1,12 @@
+
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>位置AR - 点云模型地面锚定观察</title>
-  <!-- 引入A-Frame 3D框架（内置Three.js） -->
-  <script src="https://aframe.io/releases/1.4.2/aframe.min.js"></script>
-  <!-- 引入AR.js A-Frame版本，支持位置AR -->
-  <script src="https://cdn.jsdelivr.net/npm/ar.js@2.3.1/aframe/build/aframe-ar.js"></script>
+  <title>平面AR - 点云模型地面放置观察</title>
+  <!-- 引入支持WebXR平面检测的A-Frame -->
+  <script src="https://aframe.io/releases/1.6.0/aframe.min.js"></script>
   <style>
     body, html {
       margin: 0;
@@ -37,160 +36,134 @@
   </style>
 </head>
 <body>
+  <!-- 开启WebXR的hit-test和平面检测功能 -->
   <a-scene 
-    vr-mode-ui="enabled: false" 
-    arjs="sourceType: webcam; detectionMode: mono_and_matrix; matrixCodeType: 3x3;"
+    vr-mode-ui="enabled: false"
+    webxr="requiredFeatures: hit-test,local-floor; optionalFeatures: plane-detection;"
+    renderer="antialias: true; alpha: true"
   >
     <!-- 光照系统 -->
-    <a-light type="ambient" intensity="0.6"></a-light>
-    <a-light type="directional" position="5 10 7.5" intensity="0.8" castShadow></a-light>
+    <a-light type="ambient" intensity="0.8"></a-light>
+    <a-light type="directional" position="5 10 7.5" intensity="0.6" castShadow></a-light>
     
-    <!-- GPS相机组件，处理用户位置跟踪 -->
-    <a-camera 
-      gps-camera="positionMinAccuracy: 100; alert: true;" 
-      rotation-reader
-    ></a-camera>
+    <a-camera></a-camera>
   </a-scene>
 
   <!-- 加载状态提示 -->
   <div id="loading" class="loading">
     正在初始化AR...<br>
-    请允许位置权限和相机权限
+    请允许相机权限
   </div>
 
   <script>
-    window.addEventListener('load', function() {
+    window.onload = async () => {
       const loadingEl = document.getElementById('loading');
-      const THREE = window.THREE; // A-Frame内置的Three.js
-      
-      // 获取用户当前地理位置
-      navigator.geolocation.getCurrentPosition(
-        function(position) {
-          const latitude = position.coords.latitude;
-          const longitude = position.coords.longitude;
-          
-          console.log('成功获取用户位置:', latitude, longitude);
-          loadingEl.innerHTML = '正在加载点云模型...';
-          
-          // 自动加载同目录下的pointcloud.json文件
-          fetch('./pointcloud.json')
-            .then(res => {
-              if (!res.ok) throw new Error('加载点云文件失败，请确认pointcloud.json和HTML在同一个文件夹');
-              return res.json();
-            })
-            .then(points => {
-              console.log('成功加载点云，共', points.length, '个点');
-              
-              // 1. 计算点云的边界和中心，将点云居中到原点
-              let minX = Infinity, minY = Infinity, minZ = Infinity;
-              let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
-              
-              for (const p of points) {
-                minX = Math.min(minX, p.x);
-                minY = Math.min(minY, p.y);
-                minZ = Math.min(minZ, p.z);
-                maxX = Math.max(maxX, p.x);
-                maxY = Math.max(maxY, p.y);
-                maxZ = Math.max(maxZ, p.z);
-              }
-              
-              const centerX = (minX + maxX) / 2;
-              const centerY = (minY + maxY) / 2;
-              const centerZ = (minZ + maxZ) / 2;
-              
-              // 2. 自动缩放：将点云缩放到4米左右的通用观察大小，你也可以手动修改这个系数
-              const rawWidth = Math.max(maxX - minX, maxY - minY, maxZ - minZ);
-              const scaleFactor = 4 / rawWidth; // 自动把最大边缩放到4米，适配不同大小的点云
-              
-              // 3. 构建Three.js顶点数据
-              const positions = new Float32Array(points.length * 3);
-              const colors = new Float32Array(points.length * 3);
-              
-              for (let i = 0; i < points.length; i++) {
-                const p = points[i];
-                // 平移到中心 + 缩放
-                positions[i * 3] = (p.x - centerX) * scaleFactor;
-                positions[i * 3 + 1] = (p.y - centerY) * scaleFactor;
-                positions[i * 3 + 2] = (p.z - centerZ) * scaleFactor;
-                
-                // 颜色从0-255转换为Three.js需要的0-1范围
-                colors[i * 3] = p.r / 255;
-                colors[i * 3 + 1] = p.g / 255;
-                colors[i * 3 + 2] = p.b / 255;
-              }
-              
-              // 4. 创建点云几何体
-              const geometry = new THREE.BufferGeometry();
-              geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-              geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
-              
-              // 5. 创建点云材质
-              const material = new THREE.PointsMaterial({
-                size: 0.05, // 点的大小，单位：米
-                sizeAttenuation: true, // 开启近大远小效果
-                vertexColors: true, // 使用每个点自己的颜色
-                transparent: true,
-                opacity: 0.8 // 半透明
-              });
-              
-              // 6. 创建点云对象
-              const pointCloud = new THREE.Points(geometry, material);
-              
-              // 7. 创建AR实体，锚定到用户当前位置
-              const arEntity = document.createElement('a-entity');
-              
-              // 设置GPS锚点：将点云固定在你打开页面时的真实地面位置
-              arEntity.setAttribute(
-                'gps-entity-place', 
-                `latitude: ${latitude}; longitude: ${longitude};`
-              );
-              
-              // 调整高度：将点云放置在地面上
-              arEntity.setAttribute('position', '0 -1.6 0');
-              
-              // 将点云对象添加到AR实体中
-              arEntity.setObject3D('mesh', pointCloud);
-              
-              // 8. 添加到AR场景
-              document.querySelector('a-scene').appendChild(arEntity);
-              
-              // 隐藏加载提示
-              loadingEl.style.display = 'none';
-              
-              // 引导用户
-              alert('✅ 点云模型已锚定在当前地面位置！\n你可以拿着手机移动，围绕点云进行360°观察。');
-            })
-            .catch(err => {
-              console.error('处理点云失败:', err);
-              loadingEl.innerHTML = `加载失败: ${err.message}<br>请确认pointcloud.json和HTML在同一个文件夹`;
-            });
-        },
-        function(error) {
-          // 错误处理
-          console.error('位置获取失败:', error);
-          let errorMsg = '';
-          switch(error.code) {
-            case error.PERMISSION_DENIED:
-              errorMsg = '位置权限被拒绝<br>请允许位置权限后刷新页面';
-              break;
-            case error.POSITION_UNAVAILABLE:
-              errorMsg = '位置信息不可用<br>请确保GPS已开启，且在室外环境';
-              break;
-            case error.TIMEOUT:
-              errorMsg = '获取位置超时<br>请刷新页面重试';
-              break;
-            default:
-              errorMsg = `获取位置失败: ${error.message}<br>请刷新页面重试`;
-          }
-          loadingEl.innerHTML = errorMsg;
-        },
-        {
-          enableHighAccuracy: true,
-          timeout: 15000,
-          maximumAge: 0
+      const THREE = window.THREE;
+      let pointCloud = null;
+      let isPlaced = false;
+
+      try {
+        // 1. 先加载同目录下的pointcloud.json
+        loadingEl.innerHTML = '正在加载点云模型...';
+        const res = await fetch('./pointcloud.json');
+        if(!res.ok) throw new Error('找不到pointcloud.json，请确认它和HTML在同一个文件夹');
+        const points = await res.json();
+        console.log('成功加载点云，共', points.length, '个点');
+
+        // 2. 处理点云：自动居中、缩放
+        let minX = Infinity, minY = Infinity, minZ = Infinity;
+        let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
+        for (const p of points) {
+          minX = Math.min(minX, p.x);
+          minY = Math.min(minY, p.y);
+          minZ = Math.min(minZ, p.z);
+          maxX = Math.max(maxX, p.x);
+          maxY = Math.max(maxY, p.y);
+          maxZ = Math.max(maxZ, p.z);
         }
-      );
-    });
+        const centerX = (minX + maxX) / 2;
+        const centerY = (minY + maxY) / 2;
+        const centerZ = (minZ + maxZ) / 2;
+        // 自动缩放到4米大小，适合围绕观察
+        const rawMaxSize = Math.max(maxX - minX, maxY - minY, maxZ - minZ);
+        const scaleFactor = 4 / rawMaxSize;
+
+        // 3. 构建Three.js顶点数据
+        const positions = new Float32Array(points.length * 3);
+        const colors = new Float32Array(points.length * 3);
+        for (let i = 0; i < points.length; i++) {
+          const p = points[i];
+          positions[i*3]     = (p.x - centerX) * scaleFactor;
+          positions[i*3 + 1] = (p.y - centerY) * scaleFactor;
+          positions[i*3 + 2] = (p.z - centerZ) * scaleFactor;
+          colors[i*3]       = p.r / 255;
+          colors[i*3 + 1]   = p.g / 255;
+          colors[i*3 + 2]   = p.b / 255;
+        }
+
+        // 4. 创建点云对象
+        const geometry = new THREE.BufferGeometry();
+        geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+        geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+        const material = new THREE.PointsMaterial({
+          size: 0.05,
+          sizeAttenuation: true,
+          vertexColors: true,
+          transparent: true,
+          opacity: 0.8
+        });
+        pointCloud = new THREE.Points(geometry, material);
+        // 初始位置，放在相机前方
+        pointCloud.position.set(0, 0, -1);
+
+        // 5. 添加到场景
+        const entity = document.createElement('a-entity');
+        entity.setObject3D('mesh', pointCloud);
+        document.querySelector('a-scene').appendChild(entity);
+
+        loadingEl.innerHTML = '正在扫描地面...\n请移动手机，对准你要放置模型的地面';
+
+        // 6. 监听WebXR的Hit-Test，自动检测地面平面
+        const sceneEl = document.querySelector('a-scene');
+        sceneEl.addEventListener('tick', () => {
+          if(isPlaced || !pointCloud) return;
+
+          // 获取当前的XR会话
+          const xrSession = navigator.xr?.getSession?.('immersive-ar');
+          if(!xrSession) return;
+
+          // 获取Hit-Test的结果
+          const frame = xrSession.getFrame?.();
+          if(!frame) return;
+
+          // 对屏幕中心做Hit-Test，检测地面
+          const hitTestResults = frame.getHitTestResultsForTransientInput?.(
+            xrSession.hitTestSources?.[0], 
+            new DOMPoint(0.5, 0.5)
+          );
+
+          if(hitTestResults && hitTestResults.length > 0) {
+            const hit = hitTestResults[0];
+            const pose = hit.getPose?.(xrSession.renderState.baseLayer.transform);
+            if(pose) {
+              // 找到地面了，把点云放在这个平面上
+              pointCloud.position.set(
+                pose.transform.position.x,
+                pose.transform.position.y,
+                pose.transform.position.z
+              );
+              isPlaced = true;
+              loadingEl.style.display = 'none';
+              alert('✅ 点云已成功放置在地面上！\n你可以拿着手机移动，360°围绕观察这个模型了！');
+            }
+          }
+        });
+
+      } catch (err) {
+        console.error('错误:', err);
+        loadingEl.innerHTML = `错误: ${err.message}`;
+      }
+    };
   </script>
 </body>
 </html>
