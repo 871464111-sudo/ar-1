@@ -2,9 +2,10 @@
 <html>
 <head>
 <meta charset="utf-8">
-<title>AR.js 电子云无标记AR</title>
+<title>AR平面检测 电子云无标记AR</title>
 <script src="https://aframe.io/releases/1.6.0/aframe.min.js"></script>
-<script src="https://raw.githack.com/AR-js-org/AR.js/master/aframe/build/aframe-ar.js"></script>
+<!-- 引入AR hit-test组件，用于平面检测和命中测试 -->
+<script src="https://raw.githack.com/aframevr/aframe/master/dist/components/ar-hit-test.js"></script>
 <style>
 #tip {
   position: fixed;
@@ -41,6 +42,19 @@
   background: #999;
   cursor: not-allowed;
 }
+#reticle {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 40px;
+  height: 40px;
+  border: 2px solid white;
+  border-radius: 50%;
+  background: rgba(255,255,255,0.2);
+  z-index: 999;
+  display: none;
+}
 </style>
 <script>
 // 预加载的点云数据
@@ -69,8 +83,10 @@ AFRAME.registerComponent('preloaded-pointcloud', {
     const el = this.el;
     const points = this.data.points;
     const tip = document.getElementById('tip');
+    const reticle = document.getElementById('reticle');
     
     tip.textContent = '正在创建3D模型...';
+    reticle.style.display = 'none';
     
     // 1. 计算点云包围盒，自适应缩放到40cm
     let minX = Infinity, minY = Infinity, minZ = Infinity;
@@ -244,43 +260,35 @@ AFRAME.registerComponent('preloaded-pointcloud', {
   }
 });
 
-// 放置模型的函数
-function placeModel(sceneEl) {
-  // 只处理一次点击
-  sceneEl.removeEventListener('click', placeModelHandler);
-  
-  let position;
-  // 尝试获取平面点击的交点（仅部分支持WebXR的浏览器可用）
-  const intersection = window.lastIntersection;
-  if (intersection && intersection.point) {
-    position = intersection.point;
-  } else {
-    // 不支持平面检测的设备，默认放在相机前方0.5米处，兼容原逻辑
-    position = { x: 0, y: 0, z: -0.5 };
-  }
-  
-  // 创建模型实体，使用预加载好的点云数据，秒加载
-  const entity = document.createElement('a-entity');
-  entity.setAttribute('position', {
-    x: position.x,
-    y: position.y,
-    z: position.z
-  });
-  entity.setAttribute('visible', false);
-  entity.setAttribute('preloaded-pointcloud', { points: cachedPointCloud });
-  sceneEl.appendChild(entity);
-}
-
-function placeModelHandler(e) {
-  // 保存点击的交点
-  window.lastIntersection = e.detail.intersection;
-  placeModel(document.querySelector('a-scene'));
-}
-
 // 页面加载完成后初始化
 window.addEventListener('load', () => {
   const tip = document.getElementById('tip');
   const startBtn = document.getElementById('startBtn');
+  const reticle = document.getElementById('reticle');
+  const sceneEl = document.querySelector('a-scene');
+  
+  // 监听hit-test的事件，实际的平面检测事件
+  sceneEl.addEventListener('ar-hit-test-start', () => {
+    tip.textContent = '正在扫描平面，请移动手机寻找地面...';
+    reticle.style.display = 'block';
+  });
+  
+  sceneEl.addEventListener('ar-hit-test-achieved', () => {
+    tip.textContent = '已找到平面，点击屏幕放置模型';
+  });
+  
+  sceneEl.addEventListener('ar-hit-test-select', (e) => {
+    // 实际的平面点击，放置模型，使用预加载好的数据，秒加载
+    const position = e.detail.position;
+    const entity = document.createElement('a-entity');
+    entity.setAttribute('position', position);
+    entity.setAttribute('visible', false);
+    entity.setAttribute('preloaded-pointcloud', { points: cachedPointCloud });
+    sceneEl.appendChild(entity);
+    
+    // 禁用hit-test，放置完成
+    sceneEl.setAttribute('ar-hit-test', 'enabled', false);
+  });
   
   // 开始按钮点击事件
   startBtn.addEventListener('click', async () => {
@@ -291,45 +299,14 @@ window.addEventListener('load', () => {
       
       tip.textContent = '正在请求权限，请依次允许相机和运动传感器权限...';
       
-      // 2. 并行发起两个权限请求，都在用户手势的同步上下文内，避免浏览器报错
-      // 先发起相机权限请求
-      const cameraPromise = navigator.mediaDevices.getUserMedia({ video: true });
+      // 2. 先请求相机权限，确保在用户手势上下文内
+      await navigator.mediaDevices.getUserMedia({ video: true });
       
-      // 同步发起运动权限请求，两个请求都在用户点击的同步上下文中
-      let motionPromise = Promise.resolve();
-      let hasMotionPermission = true;
-      if (typeof DeviceMotionEvent !== 'undefined' && typeof DeviceMotionEvent.requestPermission === 'function') {
-        motionPromise = DeviceMotionEvent.requestPermission().then(permission => {
-          hasMotionPermission = permission === 'granted';
-        });
-      }
-      
-      // 等待两个权限请求都完成
-      await Promise.all([cameraPromise, motionPromise]);
-      
-      // 检查运动权限是否通过
-      if (!hasMotionPermission) {
-        tip.textContent = '运动权限被拒绝，无法使用AR功能';
-        startBtn.disabled = false;
-        return;
-      }
-      
-      // 3. 权限都获取完成，现在初始化AR场景，此时权限已经都有了，AR不会再重复请求权限
-      const sceneEl = document.querySelector('a-scene');
+      // 3. 权限通过，显示AR场景，此时WebXR会自动请求运动权限，都在用户手势上下文内
       sceneEl.style.display = 'block';
       
-      // 4. 监听相机初始化完成事件
-      sceneEl.addEventListener('camera-init', () => {
-        // 相机初始化完成，提示用户扫描环境
-        tip.textContent = '请移动手机扫描环境，完成AR平面初始化...';
-        
-        // 给用户3秒时间扫描环境，初始化AR追踪
-        setTimeout(() => {
-          tip.textContent = '环境初始化完成，点击屏幕放置模型';
-          // 扫描完成，监听点击放置模型
-          sceneEl.addEventListener('click', placeModelHandler);
-        }, 3000);
-      });
+      // 4. 启用hit-test，开始实际的平面检测
+      sceneEl.setAttribute('ar-hit-test', 'enabled', true);
       
     } catch (err) {
       tip.textContent = '权限请求失败：' + err.message;
@@ -343,11 +320,17 @@ window.addEventListener('load', () => {
 <body style="margin: 0; overflow: hidden;">
 <div id="tip">点击下方按钮开始AR体验</div>
 <button id="startBtn">开始AR体验</button>
-<a-scene embedded style="display: none;" arjs="
-  sourceType: webcam;
-  detectionMode: none;
-  deviceOrientation: true;
-">
+<div id="reticle"></div>
+<!-- 使用WebXR模式，启用hit-test，实际的平面检测 -->
+<a-scene 
+  embedded 
+  style="display: none;"
+  webxr="
+    requiredFeatures: local-floor;
+    optionalFeatures: hit-test;
+  "
+  ar-hit-test="enabled: false;"
+>
   <a-entity camera look-controls></a-entity>
 </a-scene>
 </body>
