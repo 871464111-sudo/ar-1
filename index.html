@@ -1,0 +1,322 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>AR.js 电子云无标记AR</title>
+<script src="https://aframe.io/releases/1.6.0/aframe.min.js"></script>
+<script src="https://raw.githack.com/AR.js/master/aframe/build/aframe-ar.js"></script>
+<style>
+#tip {
+  position: fixed;
+  top: 20px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 12px 24px;
+  background: rgba(0,0,0,0.7);
+  color: white;
+  border-radius: 8px;
+  font-size: 16px;
+  z-index: 1000;
+  text-align: center;
+}
+#startBtn {
+  position: fixed;
+  bottom: 50px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 16px 32px;
+  background: #007AFF;
+  color: white;
+  border: none;
+  border-radius: 25px;
+  font-size: 18px;
+  cursor: pointer;
+  z-index: 1001;
+  transition: background 0.2s;
+}
+#startBtn:hover {
+  background: #0066CC;
+}
+#startBtn:disabled {
+  background: #999;
+  cursor: not-allowed;
+}
+</style>
+<script>
+// 注册点云加载组件
+AFRAME.registerComponent('pointcloud-loader', {
+  init: function () {
+    const el = this.el;
+    const sceneEl = this.el.sceneEl;
+    
+    // 显示提示
+    const tip = document.getElementById('tip');
+    tip.textContent = '正在加载点云数据（14M，可能需要几秒）';
+    
+    sceneEl.addEventListener('loaded', () => {
+      // 加载点云数据
+      fetch('./pointcloud.json')
+        .then(res => {
+          tip.textContent = '正在解析点云数据...';
+          return res.json();
+        })
+        .then(points => {
+          tip.textContent = '正在创建3D模型...';
+          // 1. 计算点云包围盒，自适应缩放到40cm
+          let minX = Infinity, minY = Infinity, minZ = Infinity;
+          let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
+          
+          points.forEach((point) => {
+            minX = Math.min(minX, point.x);
+            minY = Math.min(minY, point.y);
+            minZ = Math.min(minZ, point.z);
+            maxX = Math.max(maxX, point.x);
+            maxY = Math.max(maxY, point.y);
+            maxZ = Math.max(maxZ, point.z);
+          });
+          
+          const sizeX = maxX - minX;
+          const sizeY = maxY - minY;
+          const sizeZ = maxZ - minZ;
+          const maxSize = Math.max(sizeX, sizeY, sizeZ);
+          const scale = 0.4 / maxSize; // 缩放到最大40cm
+          
+          // 计算中心
+          const centerX = (minX + maxX) / 2;
+          const centerY = (minY + maxY) / 2;
+          const centerZ = (minZ + maxZ) / 2;
+          
+          // 解析点云
+          const vertices = new Float32Array(points.length * 3);
+          const colors = new Float32Array(points.length * 3);
+          
+          points.forEach((point, i) => {
+            vertices[i*3] = (point.x - centerX) * scale;
+            vertices[i*3+1] = (point.y - centerY) * scale;
+            vertices[i*3+2] = (point.z - centerZ) * scale;
+            colors[i*3] = point.r / 255;
+            colors[i*3+1] = point.g / 255;
+            colors[i*3+2] = point.b / 255;
+          });
+          
+          // 创建点云
+          const geometry = new THREE.BufferGeometry();
+          geometry.setAttribute('position', new THREE.BufferAttribute(vertices, 3));
+          geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+          
+          // 圆形点纹理
+          const canvas = document.createElement('canvas');
+          canvas.width = 16;
+          canvas.height = 16;
+          const ctx = canvas.getContext('2d');
+          ctx.beginPath();
+          ctx.arc(8, 8, 7, 0, Math.PI * 2);
+          ctx.fillStyle = '#ffffff';
+          ctx.fill();
+          const pointTexture = new THREE.CanvasTexture(canvas);
+          
+          const material = new THREE.PointsMaterial({
+            size: 0.01, // 放大点的大小，确保能看到
+            vertexColors: true,
+            sizeAttenuation: true,
+            map: pointTexture,
+            transparent: true
+          });
+          
+          const pointCloud = new THREE.Points(geometry, material);
+          el.object3D.add(pointCloud);
+          
+          // 2. 创建坐标轴，总长度60cm
+          const axisLen = 0.3; // 半长，总长度60cm
+          const step = axisLen / 10;
+          
+          const sphereGeo = new THREE.SphereGeometry(0.005, 4, 4);
+          const sphereMat = new THREE.MeshBasicMaterial({color: 0xffffff});
+          
+          // X轴红
+          const xGeo = new THREE.BufferGeometry();
+          xGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array([-axisLen, 0, 0, axisLen, 0, 0]), 3));
+          const xLine = new THREE.Line(xGeo, new THREE.LineBasicMaterial({color: 0xff0000, linewidth: 10}));
+          el.object3D.add(xLine);
+          for (let i = -axisLen + step; i <= axisLen; i += step) {
+            const s = new THREE.Mesh(sphereGeo, sphereMat);
+            s.position.set(i, 0, 0);
+            el.object3D.add(s);
+          }
+          const xArrow = new THREE.ArrowHelper(new THREE.Vector3(-1,0,0), new THREE.Vector3(-axisLen,0,0), 1.8*step, 0xffffff, 0.45*step, 0.225*step);
+          el.object3D.add(xArrow);
+          
+          // Y轴绿
+          const yGeo = new THREE.BufferGeometry();
+          yGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array([0, -axisLen, 0, 0, axisLen, 0]), 3));
+          const yLine = new THREE.Line(yGeo, new THREE.LineBasicMaterial({color: 0x00ff00, linewidth: 10}));
+          el.object3D.add(yLine);
+          for (let i = -axisLen + step; i <= axisLen; i += step) {
+            const s = new THREE.Mesh(sphereGeo, sphereMat);
+            s.position.set(0, i, 0);
+            el.object3D.add(s);
+          }
+          const yArrow = new THREE.ArrowHelper(new THREE.Vector3(0,-1,0), new THREE.Vector3(0,-axisLen,0), 1.8*step, 0xffffff, 0.45*step, 0.225*step);
+          el.object3D.add(yArrow);
+          
+          // Z轴蓝，正方向朝上
+          const zGeo = new THREE.BufferGeometry();
+          zGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array([0, 0, -axisLen, 0, 0, axisLen]), 3));
+          const zLine = new THREE.Line(zGeo, new THREE.LineBasicMaterial({color: 0x0000ff, linewidth: 10}));
+          el.object3D.add(zLine);
+          for (let i = -axisLen + step; i <= axisLen; i += step) {
+            const s = new THREE.Mesh(sphereGeo, sphereMat);
+            s.position.set(0, 0, i);
+            el.object3D.add(s);
+          }
+          const zArrow = new THREE.ArrowHelper(new THREE.Vector3(0,0,-1), new THREE.Vector3(0,0,-axisLen), 1.8*step, 0xffffff, 0.45*step, 0.225*step);
+          el.object3D.add(zArrow);
+          
+          // 坐标系调整，Z轴朝上
+          el.object3D.rotation.x = -Math.PI / 2;
+          // Z轴最底端离平面5cm
+          el.object3D.position.y += axisLen + 0.05;
+          
+          // 模型加载完成，显示出来
+          el.object3D.visible = true;
+          tip.textContent = '模型已显示，单指拖动移动，双指捏合缩放';
+          
+          // 3. 触摸控制：单指移动，双指缩放
+          let initialTouches = null;
+          let initialScale = 1;
+          let initialPosition = el.object3D.position.clone();
+          
+          el.sceneEl.addEventListener('touchstart', (e) => {
+            if (!el.object3D.visible) return;
+            e.preventDefault();
+            initialTouches = e.touches;
+            initialScale = el.object3D.scale.x;
+            initialPosition = el.object3D.position.clone();
+          });
+          
+          el.sceneEl.addEventListener('touchmove', (e) => {
+            if (!el.object3D.visible) return;
+            e.preventDefault();
+            if (!initialTouches) return;
+            
+            if (e.touches.length === 1) {
+              // 单指移动
+              const dx = e.touches[0].clientX - initialTouches[0].clientX;
+              const dy = e.touches[0].clientY - initialTouches[0].clientY;
+              el.object3D.position.x = initialPosition.x + dx * 0.001;
+              el.object3D.position.z = initialPosition.z + dy * 0.001;
+            } else if (e.touches.length === 2) {
+              // 双指缩放
+              const dx1 = e.touches[0].clientX - e.touches[1].clientX;
+              const dy1 = e.touches[0].clientY - e.touches[1].clientY;
+              const currentDist = Math.sqrt(dx1*dx1 + dy1*dy1);
+              
+              const dx2 = initialTouches[0].clientX - initialTouches[1].clientX;
+              const dy2 = initialTouches[0].clientY - initialTouches[1].clientY;
+              const initialDist = Math.sqrt(dx2*dx2 + dy2*dy2);
+              
+              const newScale = initialScale * (currentDist / initialDist);
+              el.object3D.scale.set(newScale, newScale, newScale);
+            }
+          });
+          
+          el.sceneEl.addEventListener('touchend', () => {
+            initialTouches = null;
+          });
+        })
+        .catch(err => {
+          tip.textContent = '加载失败：' + err.message;
+          console.error(err);
+        });
+    });
+  },
+  
+  // 自动旋转
+  tick: function(time, deltaTime) {
+    if (!this.el.object3D.visible) return;
+    const seconds = deltaTime / 1000;
+    this.el.object3D.rotation.z -= seconds * (2 * Math.PI / 30);
+  }
+});
+
+// 页面加载完成后初始化
+window.addEventListener('load', () => {
+  const tip = document.getElementById('tip');
+  const startBtn = document.getElementById('startBtn');
+  const sceneEl = document.querySelector('a-scene');
+  
+  // 放置模型的函数
+  function placeModel(e) {
+    // 只处理一次点击
+    sceneEl.removeEventListener('click', placeModel);
+    
+    let position;
+    // 尝试获取平面点击的交点（仅部分支持WebXR的浏览器可用）
+    const intersection = e.detail.intersection;
+    if (intersection && intersection.point) {
+      position = intersection.point;
+    } else {
+      // 不支持平面检测的设备，默认放在相机前方0.5米处，兼容原逻辑
+      position = { x: 0, y: 0, z: -0.5 };
+    }
+    
+    // 创建模型实体，放到计算好的位置
+    const entity = document.createElement('a-entity');
+    entity.setAttribute('position', {
+      x: position.x,
+      y: position.y,
+      z: position.z
+    });
+    entity.setAttribute('visible', false);
+    entity.setAttribute('pointcloud-loader', '');
+    sceneEl.appendChild(entity);
+  }
+  
+  // 开始按钮点击事件
+  startBtn.addEventListener('click', async () => {
+    startBtn.disabled = true;
+    try {
+      // 1. 先请求相机权限
+      tip.textContent = '正在请求相机权限...';
+      await navigator.mediaDevices.getUserMedia({ video: true });
+      
+      // 2. 再请求运动传感器权限
+      tip.textContent = '正在请求运动传感器权限...';
+      if (typeof DeviceMotionEvent !== 'undefined' && typeof DeviceMotionEvent.requestPermission === 'function') {
+        // iOS 13+ 需要手动请求运动权限
+        const permission = await DeviceMotionEvent.requestPermission();
+        if (permission !== 'granted') {
+          tip.textContent = '运动权限被拒绝，无法使用AR功能';
+          startBtn.disabled = false;
+          return;
+        }
+      }
+      
+      // 3. 权限都获取完成，显示AR场景
+      tip.textContent = '请移动手机调整视角，找到合适位置后点击屏幕放置模型';
+      sceneEl.style.display = 'block';
+      
+      // 4. 监听点击，等待用户点击放置模型
+      sceneEl.addEventListener('click', placeModel);
+      
+    } catch (err) {
+      tip.textContent = '权限请求失败：' + err.message;
+      startBtn.disabled = false;
+      console.error(err);
+    }
+  });
+});
+</script>
+</head>
+<body style="margin: 0; overflow: hidden;">
+<div id="tip">点击下方按钮开始AR体验</div>
+<button id="startBtn">开始AR体验</button>
+<a-scene embedded style="display: none;" arjs="
+  sourceType: webcam;
+  detectionMode: none;
+  deviceOrientation: true;
+">
+  <a-entity camera look-controls></a-entity>
+</a-scene>
+</body>
+</html>
