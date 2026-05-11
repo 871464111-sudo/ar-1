@@ -33,6 +33,19 @@
       font-size: 16px;
       line-height: 1.5;
     }
+    .start-btn {
+      margin-top: 20px;
+      padding: 12px 24px;
+      background: #2196F3;
+      color: white;
+      border: none;
+      border-radius: 8px;
+      font-size: 16px;
+      cursor: pointer;
+    }
+    .start-btn:hover {
+      background: #1976D2;
+    }
   </style>
 </head>
 <body>
@@ -51,26 +64,25 @@
 
   <!-- 加载状态提示 -->
   <div id="loading" class="loading">
-    正在初始化AR...<br>
-    请允许相机权限
+    正在加载点云模型...
   </div>
 
   <script>
-    window.onload = async () => {
-      const loadingEl = document.getElementById('loading');
-      const THREE = window.THREE;
-      let pointCloud = null;
-      let isPlaced = false;
+    const loadingEl = document.getElementById('loading');
+    const THREE = window.THREE;
+    let pointCloud = null;
+    let isPlaced = false;
+    let xrSession = null;
 
+    // 先加载点云
+    async function loadPointCloud() {
       try {
-        // 1. 先加载同目录下的pointcloud.json
-        loadingEl.innerHTML = '正在加载点云模型...';
         const res = await fetch('./pointcloud.json');
         if(!res.ok) throw new Error('找不到pointcloud.json，请确认它和HTML在同一个文件夹');
         const points = await res.json();
         console.log('成功加载点云，共', points.length, '个点');
 
-        // 2. 处理点云：自动居中、缩放
+        // 处理点云：自动居中、缩放
         let minX = Infinity, minY = Infinity, minZ = Infinity;
         let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
         for (const p of points) {
@@ -88,7 +100,7 @@
         const rawMaxSize = Math.max(maxX - minX, maxY - minY, maxZ - minZ);
         const scaleFactor = 4 / rawMaxSize;
 
-        // 3. 构建Three.js顶点数据
+        // 构建Three.js顶点数据
         const positions = new Float32Array(points.length * 3);
         const colors = new Float32Array(points.length * 3);
         for (let i = 0; i < points.length; i++) {
@@ -101,7 +113,7 @@
           colors[i*3 + 2]   = p.b / 255;
         }
 
-        // 4. 创建点云对象
+        // 创建点云对象
         const geometry = new THREE.BufferGeometry();
         geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
         geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
@@ -116,23 +128,59 @@
         // 初始位置，放在相机前方
         pointCloud.position.set(0, 0, -1);
 
-        // 5. 添加到场景
+        // 添加到场景
         const entity = document.createElement('a-entity');
         entity.setObject3D('mesh', pointCloud);
         document.querySelector('a-scene').appendChild(entity);
 
+        // 显示开始按钮，必须用户点击才能启动AR（浏览器安全策略）
+        loadingEl.innerHTML = `
+          点云加载完成！<br>
+          点击下方按钮，开始AR扫描
+          <br><br>
+          <button class="start-btn" id="startBtn">开始AR扫描</button>
+        `;
+
+        // 绑定按钮事件
+        document.getElementById('startBtn').addEventListener('click', startAR);
+
+      } catch (err) {
+        console.error('错误:', err);
+        loadingEl.innerHTML = `错误: ${err.message}`;
+      }
+    }
+
+    // 用户点击后，启动AR会话，这样才能触发权限请求
+    async function startAR() {
+      loadingEl.innerHTML = '正在初始化AR...';
+      try {
+        // 检查浏览器支持
+        if(!navigator.xr) {
+          throw new Error('你的浏览器不支持WebXR，请使用Chrome for Android或Safari on iOS');
+        }
+
+        // 检查是否支持immersive-ar
+        const isSupported = await navigator.xr.isSessionSupported('immersive-ar');
+        if(!isSupported) {
+          throw new Error('你的设备不支持AR，请使用支持AR的移动设备');
+        }
+
+        // 请求AR会话，这会触发摄像头权限请求
+        xrSession = await navigator.xr.requestSession('immersive-ar', {
+          requiredFeatures: ['hit-test', 'local-floor'],
+          optionalFeatures: ['plane-detection']
+        });
+
+        // 把会话绑定到A-Frame
+        const sceneEl = document.querySelector('a-scene');
+        await sceneEl.xrSession.connect(xrSession);
+
         loadingEl.innerHTML = '正在扫描地面...\n请移动手机，对准你要放置模型的地面';
 
-        // 6. 监听WebXR的Hit-Test，自动检测地面平面
-        const sceneEl = document.querySelector('a-scene');
+        // 监听Hit-Test，自动检测地面
         sceneEl.addEventListener('tick', () => {
-          if(isPlaced || !pointCloud) return;
+          if(isPlaced || !pointCloud || !xrSession) return;
 
-          // 获取当前的XR会话
-          const xrSession = navigator.xr?.getSession?.('immersive-ar');
-          if(!xrSession) return;
-
-          // 获取Hit-Test的结果
           const frame = xrSession.getFrame?.();
           if(!frame) return;
 
@@ -160,10 +208,12 @@
         });
 
       } catch (err) {
-        console.error('错误:', err);
-        loadingEl.innerHTML = `错误: ${err.message}`;
+        console.error('AR启动失败:', err);
+        loadingEl.innerHTML = `AR启动失败: ${err.message}`;
       }
-    };
+    }
+
+    window.onload = loadPointCloud;
   </script>
 </body>
 </html>
