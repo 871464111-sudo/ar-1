@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <title>AR.js 电子云无标记AR</title>
 <script src="https://aframe.io/releases/1.6.0/aframe.min.js"></script>
-<script src="https://raw.githack.com/AR.js/master/aframe/build/aframe-ar.js"></script>
+<script src="https://raw.githack.com/AR-js-org/AR.js/master/aframe/build/aframe-ar.js"></script>
 <style>
 #tip {
   position: fixed;
@@ -276,20 +276,29 @@ window.addEventListener('load', () => {
   startBtn.addEventListener('click', async () => {
     startBtn.disabled = true;
     try {
-      // 1. 先请求相机权限
-      tip.textContent = '正在请求相机权限...';
-      await navigator.mediaDevices.getUserMedia({ video: true });
+      // 并行发起两个权限请求，确保都在用户手势的上下文内，解决浏览器的权限请求限制
+      tip.textContent = '正在请求权限，请依次允许相机和运动传感器权限...';
       
-      // 2. 再请求运动传感器权限
-      tip.textContent = '正在请求运动传感器权限...';
+      // 1. 先发起相机权限请求
+      const cameraPromise = navigator.mediaDevices.getUserMedia({ video: true });
+      
+      // 2. 同步发起运动权限请求，两个请求都在用户点击的同步上下文中，避免报错
+      let motionPromise = Promise.resolve();
+      let hasMotionPermission = true;
       if (typeof DeviceMotionEvent !== 'undefined' && typeof DeviceMotionEvent.requestPermission === 'function') {
-        // iOS 13+ 需要手动请求运动权限
-        const permission = await DeviceMotionEvent.requestPermission();
-        if (permission !== 'granted') {
-          tip.textContent = '运动权限被拒绝，无法使用AR功能';
-          startBtn.disabled = false;
-          return;
-        }
+        motionPromise = DeviceMotionEvent.requestPermission().then(permission => {
+          hasMotionPermission = permission === 'granted';
+        });
+      }
+      
+      // 等待两个权限请求都完成
+      await Promise.all([cameraPromise, motionPromise]);
+      
+      // 检查运动权限是否通过
+      if (!hasMotionPermission) {
+        tip.textContent = '运动权限被拒绝，无法使用AR功能';
+        startBtn.disabled = false;
+        return;
       }
       
       // 3. 权限都获取完成，显示AR场景
